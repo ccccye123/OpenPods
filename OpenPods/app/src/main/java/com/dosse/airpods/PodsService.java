@@ -3,6 +3,7 @@ package com.dosse.airpods;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
@@ -35,8 +36,10 @@ import androidx.preference.PreferenceManager;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * This is the class that does most of the work. It has 3 functions:
@@ -90,6 +93,7 @@ public class PodsService extends Service {
     private static final ArrayList<ScanResult> recentBeacons = new ArrayList<>();
     private static final long RECENT_BEACONS_MAX_T_NS = 10000000000L; //10s
 
+    private static final Set<String> AddSet = new HashSet<>();
     private void startAirPodsScanner () {
         try {
             OpenPodsDebugLog("START SCANNER");
@@ -122,28 +126,47 @@ public class PodsService extends Service {
             else
                 settings = new ScanSettings.Builder().setScanMode(2).setReportDelay(2).build();
 
-            btScanner.startScan(filters, settings, new ScanCallback() {
+            OpenPodsDebugLog("start scan");
+
+            Builder builder = new Builder();
+            List<ScanFilter> filterList = Collections.singletonList(builder.build());
+//            btScanner.startScan(filters, settings, new ScanCallback() {
+            btScanner.startScan(new ScanCallback() {
                 @Override
-                public void onBatchScanResults (List<ScanResult> scanResults) {
-                    for (ScanResult result : scanResults)
-                        onScanResult(-1, result);
-                    super.onBatchScanResults(scanResults);
-                }
+                public void onScanResult(int callbackType, ScanResult result) {
+                    AddSet.add(result.getDevice().getAddress());
+//                    OpenPodsDebugLog("addr size:"+AddSet.size());
+//                    OpenPodsDebugLog("address:"+result.getDevice().getAddress());
+//                    OpenPodsDebugLog("device name:"+result.getDevice().getName());
+//                    result.getScanRecord().get
 
-                @Override
-                public void onScanResult (int callbackType, ScanResult result) {
-                    try {
-                        byte[] data = Objects.requireNonNull(result.getScanRecord()).getManufacturerSpecificData(76);
 
-                        if (data == null || data.length != 27)
-                            return;
+                    OpenPodsDebugLog("callbacktype:"+callbackType+"****rssi:"+result.getRssi());
 
-                        recentBeacons.add(result);
+                    byte[] data = Objects.requireNonNull(result.getScanRecord()).getManufacturerSpecificData(76);
+                    if (data == null){
+                        OpenPodsDebugLog("data is null");
+                        return;
+                    }
+                    if (data.length != 27){
+                        OpenPodsDebugLog("data.length:"+data.length);
+                        return;
+                    }
 
-                        OpenPodsDebugLog("" + result.getRssi() + "db");
-                        OpenPodsDebugLog(decodeHex(data));
+//                    ParcelUuid[] uuids = result.getDevice().getUuids();
+                    List<ParcelUuid> uuids = result.getScanRecord().getServiceUuids();
+                    if (uuids != null){
+                        for (ParcelUuid uid : uuids){
+                            OpenPodsDebugLog("uuid:"+uid.toString());
+                        }
+                    }
+                    OpenPodsDebugLog("address:"+result.getDevice().getAddress());
 
-                        ScanResult strongestBeacon = null;
+                    recentBeacons.add(result);
+
+                    OpenPodsDebugLog(decodeHex(data));
+
+                    ScanResult strongestBeacon = null;
                         for (int i = 0; i < recentBeacons.size(); i++) {
                             if (SystemClock.elapsedRealtimeNanos() - recentBeacons.get(i).getTimestampNanos() > RECENT_BEACONS_MAX_T_NS) {
                                 recentBeacons.remove(i--);
@@ -157,9 +180,14 @@ public class PodsService extends Service {
                             strongestBeacon = result;
 
                         result = strongestBeacon;
-                        assert result != null;
-                        if (result.getRssi() < -60)
+                        if (result == null)
                             return;
+//                        assert result != null;
+                        if (result.getRssi() < -60){
+                            OpenPodsDebugLog("rssi is low");
+                            return;
+                        }
+
 
                         String a = decodeHex(Objects.requireNonNull(Objects.requireNonNull(result.getScanRecord()).getManufacturerSpecificData(76)));
                         boolean flip = isFlipped(a);
@@ -167,6 +195,8 @@ public class PodsService extends Service {
                         leftStatus = Integer.parseInt("" + a.charAt(flip ? 12 : 13), 16); // Left airpod (0-10 batt; 15=disconnected)
                         rightStatus = Integer.parseInt("" + a.charAt(flip ? 13 : 12), 16); // Right airpod (0-10 batt; 15=disconnected)
                         caseStatus = Integer.parseInt("" + a.charAt(15), 16); // Case (0-10 batt; 15=disconnected)
+
+                    OpenPodsDebugLog("left:"+leftStatus+",right:"+rightStatus+",case:"+caseStatus);
 
                         int chargeStatus = Integer.parseInt("" + a.charAt(14), 16); // Charge status (bit 0=left; bit 1=right; bit 2=case)
 
@@ -182,11 +212,83 @@ public class PodsService extends Service {
                         model = (a.charAt(7) == 'E') ? MODEL_AIRPODS_PRO : MODEL_AIRPODS_NORMAL; // Detect if these are AirPods Pro or regular ones
 
                         lastSeenConnected = System.currentTimeMillis();
-                    } catch (Throwable t) {
-                        OpenPodsDebugLog("" + t);
-                    }
+
+//                    super.onScanResult(callbackType, result);
                 }
+
+                @Override
+                public void onBatchScanResults(List<ScanResult> results) {
+                    OpenPodsDebugLog("**************"+results.size());
+                    super.onBatchScanResults(results);
+                }
+
             });
+//            btScanner.startScan(filters, settings, new ScanCallback() {
+//                @Override
+//                public void onBatchScanResults (List<ScanResult> scanResults) {
+//                    for (ScanResult result : scanResults)
+//                        onScanResult(-1, result);
+//                    OpenPodsDebugLog("on scan result");
+//                    super.onBatchScanResults(scanResults);
+//                }
+//
+//                @Override
+//                public void onScanResult (int callbackType, ScanResult result) {
+//                    try {
+//                        byte[] data = Objects.requireNonNull(result.getScanRecord()).getManufacturerSpecificData(76);
+//
+//                        if (data == null || data.length != 27)
+//                            return;
+//
+//                        recentBeacons.add(result);
+//
+//                        OpenPodsDebugLog("" + result.getRssi() + "db");
+//                        OpenPodsDebugLog(decodeHex(data));
+//
+//                        ScanResult strongestBeacon = null;
+//                        for (int i = 0; i < recentBeacons.size(); i++) {
+//                            if (SystemClock.elapsedRealtimeNanos() - recentBeacons.get(i).getTimestampNanos() > RECENT_BEACONS_MAX_T_NS) {
+//                                recentBeacons.remove(i--);
+//                                continue;
+//                            }
+//                            if (strongestBeacon == null || strongestBeacon.getRssi() < recentBeacons.get(i).getRssi())
+//                                strongestBeacon = recentBeacons.get(i);
+//                        }
+//
+//                        if (strongestBeacon != null && strongestBeacon.getDevice().getAddress().equals(result.getDevice().getAddress()))
+//                            strongestBeacon = result;
+//
+//                        result = strongestBeacon;
+//                        assert result != null;
+//                        if (result.getRssi() < -60)
+//                            return;
+//
+//                        String a = decodeHex(Objects.requireNonNull(Objects.requireNonNull(result.getScanRecord()).getManufacturerSpecificData(76)));
+//                        boolean flip = isFlipped(a);
+//
+//                        leftStatus = Integer.parseInt("" + a.charAt(flip ? 12 : 13), 16); // Left airpod (0-10 batt; 15=disconnected)
+//                        rightStatus = Integer.parseInt("" + a.charAt(flip ? 13 : 12), 16); // Right airpod (0-10 batt; 15=disconnected)
+//                        caseStatus = Integer.parseInt("" + a.charAt(15), 16); // Case (0-10 batt; 15=disconnected)
+//
+//                        int chargeStatus = Integer.parseInt("" + a.charAt(14), 16); // Charge status (bit 0=left; bit 1=right; bit 2=case)
+//
+//                        chargeL = (chargeStatus & (flip ? 0b00000010 : 0b00000001)) != 0;
+//                        chargeR = (chargeStatus & (flip ? 0b00000001 : 0b00000010)) != 0;
+//                        chargeCase = (chargeStatus & 0b00000100) != 0;
+//
+//                        int inEarStatus = Integer.parseInt("" + a.charAt(11), 16); // InEar status (bit 1=left; bit 3=right)
+//
+//                        inEarL = (inEarStatus & (flip ? 0b00001000 : 0b00000010)) != 0;
+//                        inEarR = (inEarStatus & (flip ? 0b00000010 : 0b00001000)) != 0;
+//
+//                        model = (a.charAt(7) == 'E') ? MODEL_AIRPODS_PRO : MODEL_AIRPODS_NORMAL; // Detect if these are AirPods Pro or regular ones
+//
+//                        lastSeenConnected = System.currentTimeMillis();
+//                    } catch (Throwable t) {
+//                        OpenPodsDebugLog("" + t);
+//                    }
+//                }
+//            });
         } catch (Throwable t) {
             OpenPodsDebugLog("" + t);
         }
@@ -199,11 +301,19 @@ public class PodsService extends Service {
         manufacturerData[0] = 7;
         manufacturerData[1] = 25;
 
-        manufacturerDataMask[0] = -1;
-        manufacturerDataMask[1] = -1;
+//        manufacturerDataMask[0] = 0;
+//        manufacturerDataMask[1] = 0;
 
         Builder builder = new Builder();
-        builder.setManufacturerData(76, manufacturerData, manufacturerDataMask);
+//        builder.setManufacturerData(76, manufacturerData, manufacturerDataMask);
+//        builder.setManufacturerData(76, manufacturerData);
+//        builder.set
+//        builder.setDeviceAddress("69:B7:4F:2B:5D:87");
+//        ParcelUuid parcelUuid = ParcelUuid.fromString("74ec2172-0bad-4d01-8f77-997b2be0722a");
+        ParcelUuid parcelUuid = ParcelUuid.fromString("2a72e02b-7b99-778f-014d-ad0b7221ec74");
+        builder.setServiceUuid(parcelUuid);
+
+//                ParcelUuid.fromString("2a72e02b-7b99-778f-014d-ad0b7221ec74")
 
         return Collections.singletonList(builder.build());
     }
@@ -300,8 +410,10 @@ public class PodsService extends Service {
             mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
 
             for (; ; ) {
+                OpenPodsDebugLog("****************log1");
                 /*&&System.currentTimeMillis()-lastSeenConnected<TIMEOUT_CONNECTED*/
                 if (maybeConnected && !(leftStatus == 15 && rightStatus == 15 && caseStatus == 15)) {
+                    OpenPodsDebugLog("**************log2");
                     if (!notificationShowing) {
                         OpenPodsDebugLog("Creating notification");
                         notificationShowing = true;
@@ -443,7 +555,7 @@ public class PodsService extends Service {
 
                 if (action.equals(BluetoothAdapter.ACTION_STATE_CHANGED)) {
                     int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR);
-
+                    OpenPodsDebugLog("state:"+state);
                     // Bluetooth turned off, stop scanner and remove notification.
                     if (state == BluetoothAdapter.STATE_OFF || state == BluetoothAdapter.STATE_TURNING_OFF) {
                         OpenPodsDebugLog("BT OFF");
@@ -511,6 +623,7 @@ public class PodsService extends Service {
             }
         }, BluetoothProfile.HEADSET);
 
+        OpenPodsDebugLog("ba enable:"+ba.isEnabled());
         if (ba.isEnabled())
             startAirPodsScanner(); // If BT is already on when the app is started, start the scanner without waiting for an event to happen
 
